@@ -196,26 +196,18 @@ class KickVerdict(str, Enum):
     EXEMPT_VERIFIED = "exempt_verified"
     EXEMPT_OFFICER = "exempt_officer"
     EXEMPT_ROLE = "exempt_role"
+    EXEMPT_EXISTING = "exempt_existing"  # already here when the clock started
     CANNOT_KICK = "cannot_kick"        # their role outranks the bot's
     WITHIN_GRACE = "within_grace"
     KICK = "kick"
 
 
-def grace_deadline(
-    joined_at: datetime | None,
-    enforcement_started_at: datetime,
-    kick_after_days: int,
-) -> datetime:
-    """When this member's grace period runs out.
-
-    Measured from whichever is later -- the start of enforcement, or when they
-    joined -- so nobody ever gets less than a full grace period. Shared by the
-    kick logic and the welcome DM so the two can never quote different dates.
+def grace_deadline(joined_at: datetime, kick_after_days: int) -> datetime:
+    """When a new member's grace period runs out: a full kick_after_days from
+    the moment they joined. Shared by the kick logic, the welcome DM and the
+    reminders so they can never quote different dates.
     """
-    anchor = enforcement_started_at
-    if joined_at is not None and joined_at > anchor:
-        anchor = joined_at
-    return anchor + timedelta(days=kick_after_days)
+    return joined_at + timedelta(days=kick_after_days)
 
 
 def kick_decision(
@@ -228,16 +220,16 @@ def kick_decision(
     now: datetime,
     enforcement_started_at: datetime | None,
     kick_after_days: int,
-    admin_role_id: int,
+    admin_role_ids: frozenset[int] | set[int],
     exempt_role_ids: frozenset[int] | set[int],
     bot_top_position: int,
 ) -> tuple[KickVerdict, datetime | None]:
     """Decide whether one member should be kicked, and when their deadline is.
 
-    Pure: takes plain values, touches nothing. The deadline is measured from
-    whichever is later -- when officers started enforcement, or when the member
-    joined -- so nobody is ever kicked with less than a full grace period, and
-    starting enforcement can never kick anyone on the same day.
+    Pure: takes plain values, touches nothing. Only members who joined after
+    officers started the clock are on it, each from the moment they joined.
+    Everyone who was already in the server is never kicked, so starting
+    enforcement cannot remove an existing member.
     """
     if enforcement_started_at is None:
         return KickVerdict.NOT_STARTED, None
@@ -245,18 +237,43 @@ def kick_decision(
         return KickVerdict.EXEMPT_BOT, None
     if is_verified:
         return KickVerdict.EXEMPT_VERIFIED, None
-    if admin_role_id in role_ids:
+    if role_ids & set(admin_role_ids):
         return KickVerdict.EXEMPT_OFFICER, None
     if role_ids & set(exempt_role_ids):
         return KickVerdict.EXEMPT_ROLE, None
+    # No join date means we cannot prove they are new, so they are not.
+    if joined_at is None or joined_at < enforcement_started_at:
+        return KickVerdict.EXEMPT_EXISTING, None
     if top_role_position >= bot_top_position:
         return KickVerdict.CANNOT_KICK, None
 
-    deadline = grace_deadline(joined_at, enforcement_started_at, kick_after_days)
+    deadline = grace_deadline(joined_at, kick_after_days)
 
     if now < deadline:
         return KickVerdict.WITHIN_GRACE, deadline
     return KickVerdict.KICK, deadline
+
+
+def reminder_due(
+    deadline: datetime,
+    now: datetime,
+    reminder_days: tuple[int, ...] | list[int],
+    sent: set[int],
+) -> int | None:
+    """Which reminder, if any, to DM a member on the clock right now.
+
+    Each stage is a number of days left. Only the most urgent stage reached is
+    ever sent, so a member caught up after downtime gets one DM rather than
+    several back to back, and a stage already sent is never repeated.
+    """
+    left = deadline - now
+    if left <= timedelta(0):
+        return None
+    reached = [day for day in reminder_days if left <= timedelta(days=day)]
+    if not reached:
+        return None
+    most_urgent = min(reached)
+    return None if most_urgent in sent else most_urgent
 
 
 def decide(

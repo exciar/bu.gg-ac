@@ -388,7 +388,7 @@ def make_config(tmp_path, roster_mode="roster"):
         discord_token="not-a-real-token",
         guild_id=777,
         verified_role_id=888,
-        admin_role_id=999,
+        admin_role_ids=frozenset({999}),
         google_client_id=CLIENT_ID,
         google_client_secret="test-client-secret",
         base_url="http://localhost:8000",
@@ -399,6 +399,7 @@ def make_config(tmp_path, roster_mode="roster"):
         port=8000,
         kick_after_days=14,
         exempt_role_ids=frozenset(),
+        reminder_days=(7, 3, 1),
     )
 
 

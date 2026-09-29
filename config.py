@@ -28,7 +28,7 @@ class Config:
     discord_token: str
     guild_id: int
     verified_role_id: int
-    admin_role_id: int
+    admin_role_ids: frozenset[int]
     google_client_id: str
     google_client_secret: str
     base_url: str
@@ -39,6 +39,7 @@ class Config:
     port: int
     kick_after_days: int
     exempt_role_ids: frozenset[int]
+    reminder_days: tuple[int, ...]
 
     @property
     def redirect_uri(self) -> str:
@@ -65,6 +66,15 @@ def _required_int(name: str) -> int:
         raise ConfigError(f"{name} must be a number, got {raw!r}.") from None
 
 
+def _int_list(name: str, what: str) -> list[int]:
+    """Parse an optional comma-separated list of integers; blank means empty."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return [int(part.strip()) for part in raw.split(",") if part.strip()]
+    except ValueError:
+        raise ConfigError(f"{name} must be a comma-separated list of {what}.") from None
+
+
 def load_config() -> Config:
     load_dotenv()
 
@@ -85,23 +95,38 @@ def load_config() -> Config:
     if kick_after_days < 1:
         raise ConfigError("KICK_AFTER_DAYS must be at least 1.")
 
-    # Optional comma-separated role IDs that are never kicked, on top of the
-    # built-in exemptions (bots, verified members, ADMIN_ROLE_ID).
-    raw_exempt = os.environ.get("EXEMPT_ROLE_IDS", "").strip()
-    try:
-        exempt_role_ids = frozenset(
-            int(part.strip()) for part in raw_exempt.split(",") if part.strip()
-        )
-    except ValueError:
+    # Officer roles: holders can run /ac and are never kicked. ADMIN_ROLE_ID is
+    # the original single-role setting and is still honoured.
+    admin_role_ids = frozenset(
+        _int_list("ADMIN_ROLE_IDS", "role IDs") + _int_list("ADMIN_ROLE_ID", "role IDs")
+    )
+    if not admin_role_ids:
         raise ConfigError(
-            "EXEMPT_ROLE_IDS must be a comma-separated list of role IDs."
-        ) from None
+            "ADMIN_ROLE_IDS is not set. List the officer role IDs, comma-separated."
+        )
+
+    # Optional comma-separated role IDs that are never kicked, on top of the
+    # built-in exemptions (bots, verified members, officer roles).
+    exempt_role_ids = frozenset(_int_list("EXEMPT_ROLE_IDS", "role IDs"))
+
+    # Days-left marks at which a member on the clock is DM'd a reminder. Unset
+    # means the default; an empty value switches reminders off. A mark at or
+    # beyond the grace period would land on top of the welcome DM, so drop it.
+    if os.environ.get("REMINDER_DAYS") is None:
+        reminder_days = [7, 3, 1]
+    else:
+        reminder_days = _int_list("REMINDER_DAYS", "whole days")
+    if any(day < 1 for day in reminder_days):
+        raise ConfigError("REMINDER_DAYS must be whole days, each at least 1.")
+    reminder_days = tuple(
+        sorted({day for day in reminder_days if day < kick_after_days}, reverse=True)
+    )
 
     return Config(
         discord_token=_required("DISCORD_TOKEN"),
         guild_id=_required_int("GUILD_ID"),
         verified_role_id=_required_int("VERIFIED_ROLE_ID"),
-        admin_role_id=_required_int("ADMIN_ROLE_ID"),
+        admin_role_ids=admin_role_ids,
         google_client_id=_required("GOOGLE_CLIENT_ID"),
         google_client_secret=_required("GOOGLE_CLIENT_SECRET"),
         # Trailing slash would produce "https://host//callback", which Google
@@ -114,4 +139,5 @@ def load_config() -> Config:
         port=port,
         kick_after_days=kick_after_days,
         exempt_role_ids=exempt_role_ids,
+        reminder_days=reminder_days,
     )

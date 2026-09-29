@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Which verification reminders a member on the kick clock has been sent.
+-- Keyed by deadline so a member who leaves and rejoins starts afresh.
+CREATE TABLE IF NOT EXISTS reminders (
+    discord_id TEXT NOT NULL,
+    deadline   TEXT NOT NULL,
+    stage      INTEGER NOT NULL,
+    sent_at    TEXT NOT NULL,
+    PRIMARY KEY (discord_id, deadline, stage)
+);
 """
 
 # Set when officers run /ac enforce start. Absent means enforcement is off, so
@@ -228,6 +238,36 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (ENFORCEMENT_KEY, when.isoformat()),
             )
+        self.conn.commit()
+
+    # --- reminders -------------------------------------------------------
+
+    def reminders_sent(self, discord_id: str | int, deadline: datetime) -> set[int]:
+        rows = self.conn.execute(
+            "SELECT stage FROM reminders WHERE discord_id = ? AND deadline = ?",
+            (str(discord_id), deadline.isoformat()),
+        ).fetchall()
+        return {row["stage"] for row in rows}
+
+    def mark_reminder(self, discord_id: str | int, deadline: datetime, stage: int) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO reminders (discord_id, deadline, stage, sent_at) "
+            "VALUES (?, ?, ?, ?)",
+            (str(discord_id), deadline.isoformat(), stage, _utcnow()),
+        )
+        self.conn.commit()
+
+    def prune_reminders(self, keep: set[str]) -> None:
+        """Forget everyone no longer on the clock -- verified, exempt, kicked
+        or gone -- so the table only ever names members still being reminded."""
+        rows = self.conn.execute("SELECT DISTINCT discord_id FROM reminders").fetchall()
+        stale = [(row["discord_id"],) for row in rows if row["discord_id"] not in keep]
+        if stale:
+            self.conn.executemany("DELETE FROM reminders WHERE discord_id = ?", stale)
+            self.conn.commit()
+
+    def clear_reminders(self, discord_id: str | int) -> None:
+        self.conn.execute("DELETE FROM reminders WHERE discord_id = ?", (str(discord_id),))
         self.conn.commit()
 
     def stats(self) -> tuple[int, list[sqlite3.Row]]:

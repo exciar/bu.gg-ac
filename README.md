@@ -48,10 +48,10 @@ ID token, so it cannot be bypassed by editing the URL.
 | `/ac reload-roster` | officers | Re-reads the roster CSV from disk |
 | `/ac stats` | officers | Verified count, roster size, attempts by outcome |
 | `/ac enforce status` | officers | Who is on the kick clock and when they are due |
-| `/ac enforce start` | officers | Starts the kick clock — run it **after** your announcement |
+| `/ac enforce start` | officers | Puts every member who joins from now on under a deadline |
 | `/ac enforce stop` | officers | Stops the clock; nobody is kicked |
 
-`/ac` commands require `ADMIN_ROLE_ID`. Every reply is ephemeral.
+`/ac` commands require one of the officer roles in `ADMIN_ROLE_IDS`. Every reply is ephemeral.
 
 ---
 
@@ -256,44 +256,52 @@ the roster check — the `email_verified` and domain rules still apply.
 
 ## 6. Kicking members who never verify
 
-Unverified members are removed after a grace period — but **only once officers explicitly
-start the clock**, so deploying this can never remove anyone by surprise.
+New members who never verify are removed after a grace period — but **only members who join
+after officers start the clock**, and only once they have had a full `KICK_AFTER_DAYS` from
+the moment they joined. Everyone already in the server when the clock starts is never kicked,
+so deploying this or starting the clock can never remove an existing member.
 
-New members are DM'd as soon as they join, asking them to run `/verify`. The DM contains
+### Welcome DM and reminders
+
+New members are DM'd when they join, asking them to run `/verify`. The DM contains
 no link on purpose: a link would carry a token bound to their Discord ID, and anyone it
 was forwarded to could attach their own school email to that account. Running `/verify`
-keeps that token inside an ephemeral reply only they can see. If enforcement is running,
-the DM also states their deadline. Members whose DMs are closed simply get nothing and can
-still verify normally.
+keeps that token inside an ephemeral reply only they can see. If the clock is running, the
+DM also states their deadline.
+
+The server uses **Discord Onboarding**, and that is where members pick their status role
+(Undergraduate, Graduate, Outsider…). Discord assigns it only when they finish onboarding,
+which is after they join, so the bot waits for that (up to 15 minutes) before deciding whether
+to DM them.
+
+While they are on the clock, the bot also DMs a reminder at each mark in `REMINDER_DAYS`
+(default: 7, 3 and 1 day(s) left). Each reminder is sent once; after downtime a member gets only
+the most urgent one, not several back to back. Members whose DMs are closed simply get nothing
+and can still verify normally.
 
 Someone who verified before and rejoins gets their role back automatically, since their
 link still exists — no DM, no second verification.
 
-The intended sequence:
+### The sequence
 
-1. Post your announcement in the server explaining that verification is now required.
-2. Run **`/ac enforce status`** first. With the clock off, it previews exactly what starting
-   it would do: how many members are affected, who is exempt, and who outranks the bot.
-3. Run **`/ac enforce start`**. It replies with the exact deadline and the number of members
-   on the clock.
-4. The bot checks hourly. Anyone still unverified past their deadline is DM'd the reason and
-   kicked.
+1. Post your announcement in the server explaining that new members must verify.
+2. Run **`/ac enforce start`**. From that moment, every member who joins is on the clock.
+3. **`/ac enforce status`** shows who is on the clock and when each is due.
+4. The bot checks hourly: it sends any reminders that are due, then DMs the reason to anyone
+   past their deadline and kicks them.
 
-`/ac enforce stop` halts it at any time. Restarting later begins a fresh grace period.
+`/ac enforce stop` halts it at any time. Starting it again only covers members who join after
+that — anyone who joined while it was stopped counts as already here.
 
-### The deadline
-
-Measured from **whichever is later**: when you started the clock, or when the member joined.
-So long-standing members get a full `KICK_AFTER_DAYS` from your announcement rather than being
-instantly overdue, and somebody who joins on day 13 gets their own full period instead of being
-kicked the next day.
-
-### Who is never kicked
+### Who is never kicked or asked to verify
 
 - Bots
 - Verified members
-- Anyone with `ADMIN_ROLE_ID`
-- Anyone with a role listed in `EXEMPT_ROLE_IDS`
+- Anyone with an officer role in `ADMIN_ROLE_IDS`
+- Anyone with a role listed in `EXEMPT_ROLE_IDS` — BU.gg lists **Outsider** here, so
+  non-BU members get no timer and no DMs
+- Anyone who was already in the server when the clock started (or whose join date Discord
+  cannot report)
 - Anyone whose top role sits at or above the bot's — Discord forbids it. `/ac enforce status`
   counts these so they never silently look "handled"; move the bot's role up if you need them
   covered.
@@ -307,8 +315,8 @@ re-run the invite with both:
 https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=268435458&scope=bot%20applications.commands
 ```
 
-Without it, each hourly pass logs `bot lacks Kick Members -- skipping this pass` and removes
-nobody.
+Without it, each hourly pass still sends reminders but logs
+`bot lacks Kick Members -- skipping this pass` and removes nobody.
 
 Kicked members can rejoin and verify — this is a kick, never a ban. Each kick is recorded in
 `attempts` with outcome `kicked`.
@@ -328,6 +336,9 @@ Kicked members can rejoin and verify — this is a kick, never a ban. Each kick 
   while the outcomes remain, so `/ac stats` counts stay accurate but nothing in the database
   points back at them. `/ac revoke` deliberately keeps the Discord ID: that is an officer
   action and doubles as a moderation record.
+- The `reminders` table records which reminder DMs a member on the kick clock has been
+  sent (Discord ID, deadline, stage). Rows are dropped once the member verifies, leaves,
+  is kicked or runs `/unverify`.
 - Tokens and authorization codes are never logged. uvicorn's access log is disabled and
   Caddy's is discarded, because both would otherwise record the query string containing them.
 - `/unverify` deletes the member's row immediately, with no officer approval needed.
