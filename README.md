@@ -217,6 +217,21 @@ Follow the logs with `journalctl -u anti-cheat -f`.
 The app listens on `127.0.0.1` only. Nothing but Caddy can reach it, so you do not need to
 open the app's port in the firewall — only 80 and 443.
 
+### Updating from GitHub
+
+`/opt/anti-cheat` on the VPS is a git checkout of <https://github.com/exciar/anti-cheat>. It
+pulls over SSH with a **read-only deploy key** (`/root/.ssh/anti-cheat-deploy`, registered
+under the repo's Settings → Deploy keys). The host alias `github-anti-cheat` in
+`/root/.ssh/config` points at it. To ship whatever is on `main`:
+
+```bash
+ssh root@45.32.115.140 /opt/anti-cheat/deploy.sh
+```
+
+The script fetches `main`, installs requirements, runs the test suite and restarts the service.
+If the tests fail it rolls the checkout back and leaves the running bot alone. `.env`,
+`roster.csv` and the database are untracked, so a deploy never touches them.
+
 ---
 
 ## 5. Keeping the roster up to date

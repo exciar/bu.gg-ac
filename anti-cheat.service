@@ -6,7 +6,7 @@
 
 [Unit]
 Description=Anti-Cheat - BU.gg Discord verification bot
-Documentation=https://github.com/your-org/anti-cheat
+Documentation=https://github.com/exciar/anti-cheat
 After=network-online.target
 Wants=network-online.target
 
