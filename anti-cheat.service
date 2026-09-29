@@ -1,0 +1,51 @@
+# /etc/systemd/system/anti-cheat.service
+#
+#   sudo useradd --system --home /opt/anti-cheat --shell /usr/sbin/nologin anticheat
+#   sudo cp anti-cheat.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now anti-cheat
+
+[Unit]
+Description=Anti-Cheat - BU.gg Discord verification bot
+Documentation=https://github.com/your-org/anti-cheat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anticheat
+Group=anticheat
+WorkingDirectory=/opt/anti-cheat
+
+# Values must be unquoted KEY=value pairs. python-dotenv also reads
+# /opt/anti-cheat/.env from WorkingDirectory; this makes the dependency explicit
+# so the unit fails loudly if the file is missing.
+EnvironmentFile=/opt/anti-cheat/.env
+
+ExecStart=/opt/anti-cheat/.venv/bin/python /opt/anti-cheat/main.py
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anti-cheat
+
+# --- hardening ---
+# The service needs one writable directory (SQLite + WAL) and outbound HTTPS.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/anti-cheat
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Guard rail for a 1 GB VPS; steady state is well under this.
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

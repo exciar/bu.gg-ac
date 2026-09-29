@@ -1,0 +1,23 @@
+# Pinned to the versions this project was built and tested against.
+# Python 3.11+ (developed on 3.12, which is Ubuntu 24.04's default).
+
+discord.py==2.7.1
+fastapi==0.141.1
+uvicorn==0.53.0
+python-dotenv==1.2.3
+itsdangerous==2.2.0
+Authlib==1.8.0
+
+# Authlib installs joserfc itself and has deprecated its own authlib.jose
+# module in favour of it ("will be compatible before version 2.0.0"), so the
+# ID-token verification imports joserfc directly. Pinned because we import it.
+joserfc==1.7.5
+
+# Tests only.
+pytest==9.1.1
+
+# Not imported directly, pinned so a rebuild is reproducible:
+#   aiohttp      3.14.3   (discord.py; used for the Google token + JWKS calls)
+#   audioop-lts           (discord.py, only on Python 3.13+, where stdlib
+#                          audioop was removed; pip resolves it automatically)
+#   cryptography 50.0.1   (joserfc; RS256 signature verification)

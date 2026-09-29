@@ -1,0 +1,38 @@
+# Caddy snippet for Anti-Cheat.
+#
+# Serves https://verify.budotgg.xyz. Caddy obtains and renews the TLS certificate
+# automatically, so ports 80 and 443 must be open and the A record must already
+# point at this VPS before you reload Caddy.
+#
+# Append this to /etc/caddy/Caddyfile, then:
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+verify.budotgg.xyz {
+	reverse_proxy 127.0.0.1:8000
+
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Access logging is OFF on purpose.
+	#
+	# Caddy logs the full request URI including the query string, so a normal
+	# access log would write every OAuth authorization code and state token
+	# into /var/log/caddy -- exactly what this project promises not to store.
+	# The application writes its own log line (Discord ID, outcome, timestamp)
+	# to the journal instead: `journalctl -u anti-cheat -f`.
+	#
+	# If you do want request logs, do not just switch this on: use Caddy's log
+	# query filter to redact the `code` and `state` parameters first.
+	# See https://caddyserver.com/docs/caddyfile/directives/log
+	log {
+		output discard
+	}
+}
