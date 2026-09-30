@@ -41,7 +41,10 @@ PAGE = """<!doctype html>
   body {{ margin:0; min-height:100vh; display:flex; align-items:center;
          justify-content:center; padding:24px; box-sizing:border-box;
          font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
-         background:#f4f5f7; color:#1a1d21; }}
+         background:#f4f5f7; color:#1a1d21; position:relative; }}
+  /* Sits inside the body's bottom padding, so it never covers the card. */
+  .credit {{ position:absolute; right:14px; bottom:4px; font-size:12px;
+             line-height:18px; opacity:.5; }}
   @media (prefers-color-scheme: dark) {{
     body {{ background:#15171a; color:#e8eaed; }}
     .card {{ background:#1f2226 !important; border-color:#33373d !important; }}
@@ -58,7 +61,8 @@ PAGE = """<!doctype html>
          background:#1a73e8; color:#fff; text-decoration:none; font-weight:600; }}
   code {{ background:rgba(127,127,127,.18); padding:1px 5px; border-radius:4px; }}
 </style></head>
-<body><div class="card">{body}</div></body></html>
+<body><div class="card">{body}</div>
+<footer class="credit">made by Exclar</footer></body></html>
 """
 
 

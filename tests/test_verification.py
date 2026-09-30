@@ -592,3 +592,17 @@ async def test_login_page_rejects_an_expired_link(flow, monkeypatch):
     status, body = await call(app, "/login", f"state={state}")
     assert status == 400
     assert "expired" in body.lower()
+
+
+def test_every_page_carries_the_credit():
+    from web import page_error, page_expired, page_not_bu, page_success, render
+
+    pages = [
+        render("Verify your BU.gg membership", "<h1>consent</h1>"),
+        page_success("juan@bicol-u.edu.ph"),
+        page_not_bu(),
+        page_expired(),
+        page_error(),
+    ]
+    for page in pages:
+        assert '<footer class="credit">made by Exclar</footer>' in page.body.decode()
