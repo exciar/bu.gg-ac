@@ -313,8 +313,8 @@ that — anyone who joined while it was stopped counts as already here.
 - Bots
 - Verified members
 - Anyone with an officer role in `ADMIN_ROLE_IDS`
-- Anyone with a role listed in `EXEMPT_ROLE_IDS` — BU.gg lists **Outsider** here, so
-  non-BU members get no timer and no DMs
+- Anyone with a role listed in `EXEMPT_ROLE_IDS` — BU.gg lists **Outsider** and **Graduate** here, so
+  non-BU members and graduates get no timer and no DMs
 - Anyone who was already in the server when the clock started (or whose join date Discord
   cannot report)
 - Anyone whose top role sits at or above the bot's — Discord forbids it. `/ac enforce status`
