@@ -1,6 +1,6 @@
 # Anti-Cheat
 
-A Discord verification bot for **BU.gg**. A member runs `/verify`, signs in with their
+A Discord verification bot for **BU.gg (Bicol University Gaming Guild)**. A member runs `/verify`, signs in with their
 `@bicol-u.edu.ph` Google account, and gets the verified role but only if Google says the
 address is verified, it belongs to the Bicol University domain, and it appears on the roster
 the officers maintain.
