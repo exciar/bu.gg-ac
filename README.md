@@ -225,7 +225,7 @@ under the repo's Settings → Deploy keys). The host alias `github-anti-cheat` i
 `/root/.ssh/config` points at it. To ship whatever is on `main`:
 
 ```bash
-ssh root@45.32.115.140 /opt/anti-cheat/deploy.sh
+ssh root@your-vps /opt/anti-cheat/deploy.sh
 ```
 
 The script fetches `main`, installs requirements, runs the test suite and restarts the service.
