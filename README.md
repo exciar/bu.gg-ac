@@ -335,6 +335,13 @@ a fresh deadline — anyone in the server at that moment counts as already here.
   counts these so they never silently look "handled"; move the bot's role up if you need them
   covered.
 
+### Asked to verify, but never kicked
+
+Anyone with a role in `NO_KICK_ROLE_IDS` runs the same clock — welcome DM or notice, then
+reminders — but the DMs leave out the removal warning, and missing the deadline only puts them
+in the "past deadline, no-kick role" count in `/ac enforce status`. This works even for a role
+ranked above the bot, since only a kick needs the rank. BU.gg lists **Junior Councilor** here.
+
 ### Requirements
 
 The bot needs the **Kick Members** permission. If it was invited with only Manage Roles,

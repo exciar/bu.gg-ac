@@ -198,6 +198,7 @@ class KickVerdict(str, Enum):
     EXEMPT_ROLE = "exempt_role"
     CANNOT_KICK = "cannot_kick"        # their role outranks the bot's
     WITHIN_GRACE = "within_grace"
+    OVERDUE_NO_KICK = "overdue_no_kick"  # past deadline, but their role is never kicked
     KICK = "kick"
 
 
@@ -237,6 +238,7 @@ def kick_decision(
     existing_kick_after_days: int,
     admin_role_ids: frozenset[int] | set[int],
     exempt_role_ids: frozenset[int] | set[int],
+    no_kick_role_ids: frozenset[int] | set[int],
     bot_top_position: int,
 ) -> tuple[KickVerdict, datetime | None]:
     """Decide whether one member should be kicked, and when their deadline is.
@@ -244,7 +246,8 @@ def kick_decision(
     Pure: takes plain values, touches nothing. Once officers start the clock,
     every unverified member who is not exempt is on it (see grace_deadline).
     Every deadline lies at least a full grace period after the clock started,
-    so starting enforcement never removes anyone on the spot.
+    so starting enforcement never removes anyone on the spot. Members with a
+    no-kick role run the same clock, so they are reminded, but are never kicked.
     """
     if enforcement_started_at is None:
         return KickVerdict.NOT_STARTED, None
@@ -256,7 +259,9 @@ def kick_decision(
         return KickVerdict.EXEMPT_OFFICER, None
     if role_ids & set(exempt_role_ids):
         return KickVerdict.EXEMPT_ROLE, None
-    if top_role_position >= bot_top_position:
+    # Rank only matters for a kick, which a no-kick role never gets.
+    no_kick = bool(role_ids & set(no_kick_role_ids))
+    if not no_kick and top_role_position >= bot_top_position:
         return KickVerdict.CANNOT_KICK, None
 
     deadline = grace_deadline(
@@ -265,6 +270,8 @@ def kick_decision(
 
     if now < deadline:
         return KickVerdict.WITHIN_GRACE, deadline
+    if no_kick:
+        return KickVerdict.OVERDUE_NO_KICK, deadline
     return KickVerdict.KICK, deadline
 
 

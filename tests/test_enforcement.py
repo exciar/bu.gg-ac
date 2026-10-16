@@ -21,6 +21,7 @@ NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 ADMIN_ROLE = 999
 OFFICER_ROLE = 1000  # a second officer role, e.g. President
 EXEMPT_ROLE = 4242
+NO_KICK_ROLE = 4343  # e.g. Junior Councilor: reminded, never kicked
 BOT_POSITION = 43
 STARTED = NOW - timedelta(days=20)
 NEW_DAYS = 3        # joined while the clock runs, counted from joining
@@ -42,6 +43,7 @@ def verdict(**overrides):
         existing_kick_after_days=EXISTING_DAYS,
         admin_role_ids=frozenset({ADMIN_ROLE, OFFICER_ROLE}),
         exempt_role_ids=frozenset({EXEMPT_ROLE}),
+        no_kick_role_ids=frozenset({NO_KICK_ROLE}),
         bot_top_position=BOT_POSITION,
     )
     kwargs.update(overrides)
@@ -118,8 +120,29 @@ def test_exemptions_win_over_an_expired_deadline():
         ({"role_ids": {ADMIN_ROLE}}, KickVerdict.EXEMPT_OFFICER),
         ({"role_ids": {OFFICER_ROLE}}, KickVerdict.EXEMPT_OFFICER),
         ({"role_ids": {EXEMPT_ROLE}}, KickVerdict.EXEMPT_ROLE),
+        ({"role_ids": {NO_KICK_ROLE}}, KickVerdict.OVERDUE_NO_KICK),
     ]:
         assert verdict(**long_overdue, **extra)[0] is expected
+
+
+def test_no_kick_roles_run_the_clock_so_they_are_reminded():
+    joined = NOW - timedelta(hours=1)
+    got, deadline = verdict(role_ids={NO_KICK_ROLE}, joined_at=joined)
+    assert got is KickVerdict.WITHIN_GRACE
+    assert deadline == joined + timedelta(days=NEW_DAYS)
+
+
+def test_no_kick_roles_are_reminded_even_when_they_outrank_the_bot():
+    """Junior Councilor sits above the bot. Rank only blocks a kick, and a
+    no-kick role never gets one, so it must not stop the reminders."""
+    got, _ = verdict(
+        role_ids={NO_KICK_ROLE},
+        top_role_position=BOT_POSITION + 1,
+        joined_at=NOW - timedelta(hours=1),
+    )
+    assert got is KickVerdict.WITHIN_GRACE
+    overdue, _ = verdict(role_ids={NO_KICK_ROLE}, top_role_position=BOT_POSITION + 1)
+    assert overdue is KickVerdict.OVERDUE_NO_KICK
 
 
 # --- the deadline --------------------------------------------------------
@@ -219,6 +242,21 @@ def test_join_dm_states_the_deadline_only_when_enforcement_is_running():
     # Discord renders <t:...:F> in each reader's own timezone.
     assert f"<t:{int(deadline.timestamp())}:F>" in with_deadline
     assert "rejoin" in with_deadline.lower()
+
+
+def test_no_kick_dms_ask_them_to_verify_without_the_removal_warning():
+    from bot import build_join_dm, build_reminder_dm
+
+    deadline = NOW + timedelta(days=EXISTING_DAYS)
+    for text in (
+        build_join_dm("BU.gg", deadline, existing=True, kick=False),
+        build_join_dm("BU.gg", deadline, kick=False),
+        build_reminder_dm("BU.gg", deadline, kick=False),
+    ):
+        assert "/verify" in text
+        assert f"<t:{int(deadline.timestamp())}:R>" in text
+        assert "removed" not in text.lower()
+    assert "removed" in build_reminder_dm("BU.gg", deadline).lower()
 
 
 def test_join_dm_deadline_matches_what_the_kick_logic_would_use():
@@ -450,7 +488,8 @@ def make_config(**overrides):
         secret_key="k", roster_path="roster.csv", roster_mode="roster",
         db_path=":memory:", port=8000,
         kick_after_days=NEW_DAYS, existing_kick_after_days=EXISTING_DAYS,
-        exempt_role_ids=frozenset({EXEMPT_ROLE}), reminder_days=STAGES,
+        exempt_role_ids=frozenset({EXEMPT_ROLE}), no_kick_role_ids=frozenset({NO_KICK_ROLE}),
+        reminder_days=STAGES,
     )
     base.update(overrides)
     return Config(**base)
@@ -469,6 +508,7 @@ def test_scan_sorts_a_mixed_guild_into_the_right_buckets():
         FakeMember(id=7, joined_at=NOW - timedelta(days=1)),         # new joiner
         FakeMember(id=8, joined_at=NOW - timedelta(days=400)),       # here first, grace over
         FakeMember(id=9, roles=[FakeRole(OFFICER_ROLE, position=57)]),  # President
+        FakeMember(id=10, roles=[FakeRole(NO_KICK_ROLE, position=99)]),  # JC, overdue
     ]
     grouped = scan_members(
         members,
@@ -489,6 +529,7 @@ def test_scan_sorts_a_mixed_guild_into_the_right_buckets():
     assert ids(KickVerdict.EXEMPT_ROLE) == [5]
     assert ids(KickVerdict.CANNOT_KICK) == [6]
     assert ids(KickVerdict.WITHIN_GRACE) == [7]
+    assert ids(KickVerdict.OVERDUE_NO_KICK) == [10]
 
 
 def test_starting_the_clock_today_kicks_nobody_in_an_established_guild():

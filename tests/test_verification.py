@@ -400,6 +400,7 @@ def make_config(tmp_path, roster_mode="roster"):
         kick_after_days=3,
         existing_kick_after_days=14,
         exempt_role_ids=frozenset(),
+        no_kick_role_ids=frozenset(),
         reminder_days=(7, 3, 1),
     )
 

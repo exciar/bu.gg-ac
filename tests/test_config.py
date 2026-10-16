@@ -17,8 +17,8 @@ BASE_ENV = {
     "SECRET_KEY": "k",
 }
 OPTIONAL = ["ADMIN_ROLE_ID", "ADMIN_ROLE_IDS", "REMINDER_DAYS", "KICK_AFTER_DAYS",
-            "EXISTING_KICK_AFTER_DAYS", "EXEMPT_ROLE_IDS", "ROSTER_MODE",
-            "ROSTER_PATH", "PORT", "DB_PATH"]
+            "EXISTING_KICK_AFTER_DAYS", "EXEMPT_ROLE_IDS", "NO_KICK_ROLE_IDS",
+            "ROSTER_MODE", "ROSTER_PATH", "PORT", "DB_PATH"]
 
 
 @pytest.fixture()
@@ -57,6 +57,13 @@ def test_a_malformed_officer_role_fails_loudly(env):
     env.setenv("ADMIN_ROLE_IDS", "10,President")
     with pytest.raises(ConfigError, match="ADMIN_ROLE_IDS"):
         load_config()
+
+
+def test_no_kick_roles_are_optional_and_comma_separated(env):
+    env.setenv("ADMIN_ROLE_IDS", "10")
+    assert load_config().no_kick_role_ids == frozenset()
+    env.setenv("NO_KICK_ROLE_IDS", "40, 41")
+    assert load_config().no_kick_role_ids == frozenset({40, 41})
 
 
 def test_reminders_default_to_seven_three_and_one_day_left(env):

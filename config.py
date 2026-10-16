@@ -40,6 +40,7 @@ class Config:
     kick_after_days: int
     existing_kick_after_days: int
     exempt_role_ids: frozenset[int]
+    no_kick_role_ids: frozenset[int]
     reminder_days: tuple[int, ...]
 
     @property
@@ -119,6 +120,9 @@ def load_config() -> Config:
     # Optional comma-separated role IDs that are never kicked, on top of the
     # built-in exemptions (bots, verified members, officer roles).
     exempt_role_ids = frozenset(_int_list("EXEMPT_ROLE_IDS", "role IDs"))
+    # Optional comma-separated role IDs that are never kicked but are still
+    # asked to verify: they get the same DMs, minus the removal warning.
+    no_kick_role_ids = frozenset(_int_list("NO_KICK_ROLE_IDS", "role IDs"))
 
     # Days-left marks at which a member on the clock is DM'd a reminder. Unset
     # means the default; an empty value switches reminders off. Marks at or
@@ -149,5 +153,6 @@ def load_config() -> Config:
         kick_after_days=kick_after_days,
         existing_kick_after_days=existing_kick_after_days,
         exempt_role_ids=exempt_role_ids,
+        no_kick_role_ids=no_kick_role_ids,
         reminder_days=reminder_days,
     )

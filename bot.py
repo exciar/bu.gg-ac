@@ -39,11 +39,19 @@ ONBOARDING_SETTLE_SECONDS = 5
 # Gap between DMs in one hourly pass, so a batch (everyone already here is
 # notified at once when the clock starts) doesn't look like spam to Discord.
 DM_PAUSE_SECONDS = 1
+# Follows a stated deadline, except for members with a no-kick role.
+REMOVAL_NOTE = (
+    " Unverified accounts are removed after that, though you're welcome to "
+    "rejoin and verify."
+)
 
 
-def build_join_dm(guild_name: str, deadline: datetime | None, *, existing: bool = False) -> str:
+def build_join_dm(
+    guild_name: str, deadline: datetime | None, *, existing: bool = False, kick: bool = True
+) -> str:
     """The welcome DM or, with existing=True, the notice sent to members who
-    were already here when the clock started. Deliberately contains no
+    were already here when the clock started. kick=False drops the removal
+    warning for members with a no-kick role. Deliberately contains no
     verification link.
 
     A link would carry a signed token tied to this member's Discord ID, and
@@ -75,17 +83,17 @@ def build_join_dm(guild_name: str, deadline: datetime | None, *, existing: bool 
         "delete it.",
     ]
     if deadline is not None:
+        stamp = int(deadline.timestamp())
         lines += [
             "",
-            f"Please do this by <t:{int(deadline.timestamp())}:F> "
-            f"(<t:{int(deadline.timestamp())}:R>). Unverified accounts are "
-            "removed after that, though you're welcome to rejoin and verify.",
+            f"Please do this by <t:{stamp}:F> (<t:{stamp}:R>)."
+            + (REMOVAL_NOTE if kick else ""),
         ]
     lines += ["", "Questions? Message an officer in the server."]
     return "\n".join(lines)
 
 
-def build_reminder_dm(guild_name: str, deadline: datetime) -> str:
+def build_reminder_dm(guild_name: str, deadline: datetime, *, kick: bool = True) -> str:
     """A nudge for a member still on the kick clock. No link, for the same
     reason as the welcome DM."""
     stamp = int(deadline.timestamp())
@@ -96,8 +104,8 @@ def build_reminder_dm(guild_name: str, deadline: datetime) -> str:
             "Go to the server and run **`/verify`** to sign in with your "
             "`@bicol-u.edu.ph` Google account. It takes about a minute.",
             "",
-            f"Your deadline is <t:{stamp}:F> (<t:{stamp}:R>). Unverified accounts "
-            "are removed after that, though you're welcome to rejoin and verify.",
+            f"Your deadline is <t:{stamp}:F> (<t:{stamp}:R>)."
+            + (REMOVAL_NOTE if kick else ""),
             "",
             "Questions? Message an officer in the server.",
         ]
@@ -149,6 +157,7 @@ def scan_members(members, *, cfg, verified_ids, bot_top_position, enforcement_st
             existing_kick_after_days=cfg.existing_kick_after_days,
             admin_role_ids=cfg.admin_role_ids,
             exempt_role_ids=cfg.exempt_role_ids,
+            no_kick_role_ids=cfg.no_kick_role_ids,
             bot_top_position=bot_top_position,
         )
         grouped[verdict].append((member, deadline))
@@ -210,7 +219,8 @@ class AntiCheatBot(commands.Bot):
         member = await self._after_onboarding(member)
         if member is None:
             return  # left before finishing onboarding
-        if not wants_verification_dm({role.id for role in member.roles}, self.cfg):
+        role_ids = {role.id for role in member.roles}
+        if not wants_verification_dm(role_ids, self.cfg):
             log.info("join: discord_id=%s holds an exempt role, no DM", member.id)
             return
         if self.store.link_for_discord(member.id) is not None:
@@ -226,7 +236,10 @@ class AntiCheatBot(commands.Bot):
             )
 
         try:
-            await member.send(build_join_dm(member.guild.name, deadline))
+            await member.send(build_join_dm(
+                member.guild.name, deadline,
+                kick=not (role_ids & self.cfg.no_kick_role_ids),
+            ))
             self.store.log_attempt(member.id, "join_dm_sent")
             log.info("join: verification DM sent to discord_id=%s", member.id)
         except discord.Forbidden:
@@ -278,10 +291,11 @@ class AntiCheatBot(commands.Bot):
                 continue
             notice = existing and stage == self.cfg.existing_kick_after_days
             kind = "notice" if notice else "reminder"
+            kick = not ({role.id for role in member.roles} & self.cfg.no_kick_role_ids)
             text = (
-                build_join_dm(guild.name, deadline, existing=True)
+                build_join_dm(guild.name, deadline, existing=True, kick=kick)
                 if notice
-                else build_reminder_dm(guild.name, deadline)
+                else build_reminder_dm(guild.name, deadline, kick=kick)
             )
             # Recorded before sending, so closed DMs are not retried every hour.
             self.store.mark_reminder(member.id, deadline, stage)
@@ -668,7 +682,8 @@ def register_commands(bot: AntiCheatBot) -> None:
         await interaction.followup.send(
             "**Kick clock started.**\n"
             "Every member who isn't verified must run `/verify` or be removed: "
-            f"{grace_note}. Officers and exempt roles are never on the clock.\n"
+            f"{grace_note}. Officers and exempt roles are never on the clock; no-kick "
+            "roles (e.g. Junior Councilor) are reminded but never removed.\n"
             "Members already here are DM'd their deadline within the hour, new members "
             f"when they join; {reminder_note}.\n"
             "`/ac enforce status` to watch it, `/ac enforce stop` to call it off.",
@@ -716,6 +731,8 @@ def register_commands(bot: AntiCheatBot) -> None:
             f"{grace_note}; {reminder_note}",
             f"unverified, on the clock: **{len(pending)}**",
             f"past deadline (kicked next pass): **{len(due)}**",
+            f"past deadline, no-kick role (never kicked): "
+            f"**{len(grouped[KickVerdict.OVERDUE_NO_KICK])}**",
             f"verified: **{len(grouped[KickVerdict.EXEMPT_VERIFIED])}**",
             f"officers: **{len(grouped[KickVerdict.EXEMPT_OFFICER])}**",
             f"exempt roles (e.g. Outsider): **{len(grouped[KickVerdict.EXEMPT_ROLE])}**",
