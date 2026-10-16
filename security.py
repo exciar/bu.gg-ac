@@ -196,17 +196,31 @@ class KickVerdict(str, Enum):
     EXEMPT_VERIFIED = "exempt_verified"
     EXEMPT_OFFICER = "exempt_officer"
     EXEMPT_ROLE = "exempt_role"
-    EXEMPT_EXISTING = "exempt_existing"  # already here when the clock started
     CANNOT_KICK = "cannot_kick"        # their role outranks the bot's
     WITHIN_GRACE = "within_grace"
     KICK = "kick"
 
 
-def grace_deadline(joined_at: datetime, kick_after_days: int) -> datetime:
-    """When a new member's grace period runs out: a full kick_after_days from
-    the moment they joined. Shared by the kick logic, the welcome DM and the
-    reminders so they can never quote different dates.
+def is_existing_member(joined_at: datetime | None, started: datetime) -> bool:
+    """Already in the server when the clock started. No join date means we
+    cannot prove they are new, so they count as already here."""
+    return joined_at is None or joined_at < started
+
+
+def grace_deadline(
+    joined_at: datetime | None,
+    started: datetime,
+    kick_after_days: int,
+    existing_kick_after_days: int,
+) -> datetime:
+    """When a member's grace period runs out. Members who join while the clock
+    runs get kick_after_days from the moment they join; members already here
+    get existing_kick_after_days from the moment the clock started. Shared by
+    the kick logic, the welcome DM and the reminders so they can never quote
+    different dates.
     """
+    if is_existing_member(joined_at, started):
+        return started + timedelta(days=existing_kick_after_days)
     return joined_at + timedelta(days=kick_after_days)
 
 
@@ -220,16 +234,17 @@ def kick_decision(
     now: datetime,
     enforcement_started_at: datetime | None,
     kick_after_days: int,
+    existing_kick_after_days: int,
     admin_role_ids: frozenset[int] | set[int],
     exempt_role_ids: frozenset[int] | set[int],
     bot_top_position: int,
 ) -> tuple[KickVerdict, datetime | None]:
     """Decide whether one member should be kicked, and when their deadline is.
 
-    Pure: takes plain values, touches nothing. Only members who joined after
-    officers started the clock are on it, each from the moment they joined.
-    Everyone who was already in the server is never kicked, so starting
-    enforcement cannot remove an existing member.
+    Pure: takes plain values, touches nothing. Once officers start the clock,
+    every unverified member who is not exempt is on it (see grace_deadline).
+    Every deadline lies at least a full grace period after the clock started,
+    so starting enforcement never removes anyone on the spot.
     """
     if enforcement_started_at is None:
         return KickVerdict.NOT_STARTED, None
@@ -241,13 +256,12 @@ def kick_decision(
         return KickVerdict.EXEMPT_OFFICER, None
     if role_ids & set(exempt_role_ids):
         return KickVerdict.EXEMPT_ROLE, None
-    # No join date means we cannot prove they are new, so they are not.
-    if joined_at is None or joined_at < enforcement_started_at:
-        return KickVerdict.EXEMPT_EXISTING, None
     if top_role_position >= bot_top_position:
         return KickVerdict.CANNOT_KICK, None
 
-    deadline = grace_deadline(joined_at, kick_after_days)
+    deadline = grace_deadline(
+        joined_at, enforcement_started_at, kick_after_days, existing_kick_after_days
+    )
 
     if now < deadline:
         return KickVerdict.WITHIN_GRACE, deadline

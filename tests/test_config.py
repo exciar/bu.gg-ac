@@ -17,7 +17,8 @@ BASE_ENV = {
     "SECRET_KEY": "k",
 }
 OPTIONAL = ["ADMIN_ROLE_ID", "ADMIN_ROLE_IDS", "REMINDER_DAYS", "KICK_AFTER_DAYS",
-            "EXEMPT_ROLE_IDS", "ROSTER_MODE", "ROSTER_PATH", "PORT", "DB_PATH"]
+            "EXISTING_KICK_AFTER_DAYS", "EXEMPT_ROLE_IDS", "ROSTER_MODE",
+            "ROSTER_PATH", "PORT", "DB_PATH"]
 
 
 @pytest.fixture()
@@ -69,12 +70,20 @@ def test_reminder_days_are_configurable(env):
     assert load_config().reminder_days == (5, 1)
 
 
-def test_reminders_at_or_beyond_the_grace_period_are_dropped(env):
-    """A reminder at 14 days left would land on top of the welcome DM."""
+def test_grace_periods_default_to_three_days_new_and_fourteen_existing(env):
     env.setenv("ADMIN_ROLE_IDS", "10")
-    env.setenv("KICK_AFTER_DAYS", "5")
-    env.setenv("REMINDER_DAYS", "7,5,3,1")
-    assert load_config().reminder_days == (3, 1)
+    cfg = load_config()
+    assert (cfg.kick_after_days, cfg.existing_kick_after_days) == (3, 14)
+
+
+def test_malformed_grace_periods_fail_loudly(env):
+    env.setenv("ADMIN_ROLE_IDS", "10")
+    for name in ("KICK_AFTER_DAYS", "EXISTING_KICK_AFTER_DAYS"):
+        for bad in ("soon", "0"):
+            env.setenv(name, bad)
+            with pytest.raises(ConfigError, match=name):
+                load_config()
+        env.delenv(name)
 
 
 def test_reminders_can_be_switched_off(env):

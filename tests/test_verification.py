@@ -397,7 +397,8 @@ def make_config(tmp_path, roster_mode="roster"):
         roster_mode=roster_mode,
         db_path=str(tmp_path / "test.db"),
         port=8000,
-        kick_after_days=14,
+        kick_after_days=3,
+        existing_kick_after_days=14,
         exempt_role_ids=frozenset(),
         reminder_days=(7, 3, 1),
     )

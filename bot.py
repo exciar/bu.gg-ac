@@ -22,6 +22,7 @@ from security import (
     KickVerdict,
     Outcome,
     grace_deadline,
+    is_existing_member,
     kick_decision,
     make_state,
     reminder_due,
@@ -35,21 +36,35 @@ log = logging.getLogger("anticheat.bot")
 ONBOARDING_WAIT_SECONDS = 15 * 60
 # Pause after onboarding completes so the roles it grants have landed in cache.
 ONBOARDING_SETTLE_SECONDS = 5
+# Gap between DMs in one hourly pass, so a batch (everyone already here is
+# notified at once when the clock starts) doesn't look like spam to Discord.
+DM_PAUSE_SECONDS = 1
 
 
-def build_join_dm(guild_name: str, deadline: datetime | None) -> str:
-    """The welcome DM. Deliberately contains no verification link.
+def build_join_dm(guild_name: str, deadline: datetime | None, *, existing: bool = False) -> str:
+    """The welcome DM or, with existing=True, the notice sent to members who
+    were already here when the clock started. Deliberately contains no
+    verification link.
 
     A link would carry a signed token tied to this member's Discord ID, and
     anyone who got hold of it could attach their own school email to this
     account. Asking them to run /verify keeps that token inside an ephemeral
     reply that only they can see, and it never goes stale.
     """
-    lines = [
-        f"Welcome to **{guild_name}**!",
-        "",
-        "This server is for Bicol University students, so we ask members to "
-        "confirm a school account before getting full access.",
+    if existing:
+        intro = [
+            f"**{guild_name}** now asks every member, including those who joined "
+            "earlier, to confirm a Bicol University school account. Yours isn't "
+            "verified yet.",
+        ]
+    else:
+        intro = [
+            f"Welcome to **{guild_name}**!",
+            "",
+            "This server is for Bicol University students, so we ask members to "
+            "confirm a school account before getting full access.",
+        ]
+    lines = intro + [
         "",
         "**To verify:** go to the server and run the **`/verify`** command. "
         "You'll get a private link to sign in with your `@bicol-u.edu.ph` "
@@ -89,6 +104,19 @@ def build_reminder_dm(guild_name: str, deadline: datetime) -> str:
     )
 
 
+def reminder_stages(cfg: Config, existing: bool) -> tuple[int, ...]:
+    """Days-left marks at which to DM one member on the clock.
+
+    A mark at or beyond their grace period would land on top of their first
+    DM, so it is skipped. Members already here never got a welcome DM with a
+    deadline, so their full grace period is a stage too: the notice that the
+    clock now covers them.
+    """
+    grace = cfg.existing_kick_after_days if existing else cfg.kick_after_days
+    stages = tuple(day for day in cfg.reminder_days if day < grace)
+    return (grace, *stages) if existing else stages
+
+
 def wants_verification_dm(role_ids, cfg: Config) -> bool:
     """Officers and exempt roles (e.g. Outsider) are never on the clock, so
     they are never asked to verify."""
@@ -118,6 +146,7 @@ def scan_members(members, *, cfg, verified_ids, bot_top_position, enforcement_st
             now=now,
             enforcement_started_at=enforcement_started_at,
             kick_after_days=cfg.kick_after_days,
+            existing_kick_after_days=cfg.existing_kick_after_days,
             admin_role_ids=cfg.admin_role_ids,
             exempt_role_ids=cfg.exempt_role_ids,
             bot_top_position=bot_top_position,
@@ -187,12 +216,14 @@ class AntiCheatBot(commands.Bot):
         if self.store.link_for_discord(member.id) is not None:
             return  # verified while onboarding
 
-        # Same rule as kick_decision: only members who joined after the clock
-        # started are on it, from the moment they joined.
+        # Same rule as kick_decision, so the DM and the kicker agree on the date.
         deadline = None
         started = self.store.get_enforcement_start()
-        if started is not None and member.joined_at is not None and member.joined_at >= started:
-            deadline = grace_deadline(member.joined_at, self.cfg.kick_after_days)
+        if started is not None:
+            deadline = grace_deadline(
+                member.joined_at, started,
+                self.cfg.kick_after_days, self.cfg.existing_kick_after_days,
+            )
 
         try:
             await member.send(build_join_dm(member.guild.name, deadline))
@@ -231,26 +262,39 @@ class AntiCheatBot(commands.Bot):
                 )
         return member.guild.get_member(member.id)
 
-    async def _send_reminders(self, guild: discord.Guild, pending, now: datetime) -> None:
-        """DM each member on the clock who has reached a new reminder stage."""
+    async def _send_reminders(
+        self, guild: discord.Guild, pending, started: datetime, now: datetime
+    ) -> None:
+        """DM each member on the clock who has reached a new reminder stage.
+        Members already here when the clock started first get a notice with
+        their deadline, in place of the welcome DM they never had."""
         for member, deadline in pending:
+            existing = is_existing_member(member.joined_at, started)
             stage = reminder_due(
-                deadline, now, self.cfg.reminder_days,
+                deadline, now, reminder_stages(self.cfg, existing),
                 self.store.reminders_sent(member.id, deadline),
             )
             if stage is None:
                 continue
+            notice = existing and stage == self.cfg.existing_kick_after_days
+            kind = "notice" if notice else "reminder"
+            text = (
+                build_join_dm(guild.name, deadline, existing=True)
+                if notice
+                else build_reminder_dm(guild.name, deadline)
+            )
             # Recorded before sending, so closed DMs are not retried every hour.
             self.store.mark_reminder(member.id, deadline, stage)
             try:
-                await member.send(build_reminder_dm(guild.name, deadline))
-                self.store.log_attempt(member.id, "reminder_sent")
-                log.info("reminder: %d-day reminder sent to discord_id=%s", stage, member.id)
+                await member.send(text)
+                self.store.log_attempt(member.id, f"{kind}_sent")
+                log.info("%s: %d-day %s sent to discord_id=%s", kind, stage, kind, member.id)
             except discord.Forbidden:
-                self.store.log_attempt(member.id, "reminder_blocked")
-                log.info("reminder: DMs closed for discord_id=%s", member.id)
+                self.store.log_attempt(member.id, f"{kind}_blocked")
+                log.info("%s: DMs closed for discord_id=%s", kind, member.id)
             except discord.HTTPException as exc:
-                log.warning("reminder: DM failed for discord_id=%s (%s)", member.id, exc)
+                log.warning("%s: DM failed for discord_id=%s (%s)", kind, member.id, exc)
+            await asyncio.sleep(DM_PAUSE_SECONDS)
 
     @tasks.loop(hours=1)
     async def enforce_loop(self) -> None:
@@ -281,7 +325,7 @@ class AntiCheatBot(commands.Bot):
         )
 
         pending = grouped[KickVerdict.WITHIN_GRACE]
-        await self._send_reminders(guild, pending, now)
+        await self._send_reminders(guild, pending, started, now)
         self.store.prune_reminders({str(member.id) for member, _ in pending})
 
         due = grouped[KickVerdict.KICK]
@@ -301,7 +345,7 @@ class AntiCheatBot(commands.Bot):
             try:
                 await member.send(
                     f"You have been removed from **{guild.name}** because your "
-                    f"membership was not verified within {self.cfg.kick_after_days} days.\n\n"
+                    "account was not verified by its deadline.\n\n"
                     "You can rejoin at any time and run `/verify` to confirm your "
                     "BU account. If you believe this is a mistake, contact an officer."
                 )
@@ -309,9 +353,7 @@ class AntiCheatBot(commands.Bot):
                 pass  # DMs closed; the kick still proceeds
 
             try:
-                await member.kick(
-                    reason=f"Anti-Cheat: unverified after {self.cfg.kick_after_days} days"
-                )
+                await member.kick(reason="Anti-Cheat: not verified by the deadline")
                 self.store.log_attempt(member.id, "kicked")
                 log.info("enforcement: kicked discord_id=%s", member.id)
             except discord.Forbidden:
@@ -600,11 +642,14 @@ def register_commands(bot: AntiCheatBot) -> None:
             now=datetime.now(timezone.utc),
         )
 
-    def _reminder_note() -> str:
-        if not cfg.reminder_days:
-            return ""
-        days = ", ".join(str(day) for day in cfg.reminder_days)
-        return f" and reminded at {days} day(s) left"
+    grace_note = (
+        f"members already here get **{cfg.existing_kick_after_days} days** from the clock "
+        f"start, members who join later get **{cfg.kick_after_days} days** from joining"
+    )
+    reminder_note = (
+        f"reminders at {', '.join(map(str, cfg.reminder_days))} day(s) left, where the "
+        "deadline allows" if cfg.reminder_days else "reminders off"
+    )
 
     @enforce.command(name="start", description="Start the kick clock (run this after your announcement)")
     @admin_only()
@@ -622,11 +667,10 @@ def register_commands(bot: AntiCheatBot) -> None:
         store.set_enforcement_start(datetime.now(timezone.utc))
         await interaction.followup.send(
             "**Kick clock started.**\n"
-            f"From now on, every member who joins has **{cfg.kick_after_days} days** from "
-            "the moment they join to run `/verify`, or they are removed. Members already "
-            "in the server are not affected, and officers and exempt roles are never on "
-            "the clock.\n"
-            f"New members are DM'd when they join{_reminder_note()}.\n"
+            "Every member who isn't verified must run `/verify` or be removed: "
+            f"{grace_note}. Officers and exempt roles are never on the clock.\n"
+            "Members already here are DM'd their deadline within the hour, new members "
+            f"when they join; {reminder_note}.\n"
             "`/ac enforce status` to watch it, `/ac enforce stop` to call it off.",
             ephemeral=True,
         )
@@ -641,8 +685,8 @@ def register_commands(bot: AntiCheatBot) -> None:
             return
         store.set_enforcement_start(None)
         await interaction.response.send_message(
-            "**Kick clock stopped.** Nobody will be kicked. Starting it again only "
-            "covers members who join after that.",
+            "**Kick clock stopped.** Nobody will be kicked. Starting it again gives "
+            "every member who isn't verified a fresh deadline.",
             ephemeral=True,
         )
 
@@ -659,8 +703,8 @@ def register_commands(bot: AntiCheatBot) -> None:
         header = (
             f"**Kick clock: running** since <t:{int(started.timestamp())}:f>"
             if started
-            else "**Kick clock: off** — nobody is on it. `/ac enforce start` puts "
-            "every member who joins from then on under a deadline."
+            else "**Kick clock: off** — nobody is on it. Counts below preview "
+            "`/ac enforce start` as if it ran now."
         )
         due = grouped[KickVerdict.KICK]
         pending = sorted(
@@ -669,16 +713,13 @@ def register_commands(bot: AntiCheatBot) -> None:
         lines = [
             header,
             "",
-            f"grace period: **{cfg.kick_after_days} days** from joining, "
-            f"reminders{_reminder_note() or ' off'}",
-            f"new and unverified, on the clock: **{len(pending)}**",
+            f"{grace_note}; {reminder_note}",
+            f"unverified, on the clock: **{len(pending)}**",
             f"past deadline (kicked next pass): **{len(due)}**",
             f"verified: **{len(grouped[KickVerdict.EXEMPT_VERIFIED])}**",
             f"officers: **{len(grouped[KickVerdict.EXEMPT_OFFICER])}**",
             f"exempt roles (e.g. Outsider): **{len(grouped[KickVerdict.EXEMPT_ROLE])}**",
-            f"here before the clock started, never kicked: "
-            f"**{len(grouped[KickVerdict.EXEMPT_EXISTING])}**",
-            f"new but outrank the bot, cannot be kicked: "
+            f"unverified but outrank the bot, cannot be kicked: "
             f"**{len(grouped[KickVerdict.CANNOT_KICK])}**",
         ]
         if pending:

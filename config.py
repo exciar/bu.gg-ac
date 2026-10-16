@@ -38,6 +38,7 @@ class Config:
     db_path: str
     port: int
     kick_after_days: int
+    existing_kick_after_days: int
     exempt_role_ids: frozenset[int]
     reminder_days: tuple[int, ...]
 
@@ -66,6 +67,17 @@ def _required_int(name: str) -> int:
         raise ConfigError(f"{name} must be a number, got {raw!r}.") from None
 
 
+def _days(name: str, default: int) -> int:
+    """An optional whole number of days, at least 1."""
+    try:
+        days = int(os.environ.get(name, str(default)))
+    except ValueError:
+        raise ConfigError(f"{name} must be a number of days.") from None
+    if days < 1:
+        raise ConfigError(f"{name} must be at least 1.")
+    return days
+
+
 def _int_list(name: str, what: str) -> list[int]:
     """Parse an optional comma-separated list of integers; blank means empty."""
     raw = os.environ.get(name, "").strip()
@@ -88,12 +100,11 @@ def load_config() -> Config:
     except ValueError:
         raise ConfigError("PORT must be a number.") from None
 
-    try:
-        kick_after_days = int(os.environ.get("KICK_AFTER_DAYS", "14"))
-    except ValueError:
-        raise ConfigError("KICK_AFTER_DAYS must be a number of days.") from None
-    if kick_after_days < 1:
-        raise ConfigError("KICK_AFTER_DAYS must be at least 1.")
+    # Grace periods. Members who join while the clock runs count from joining;
+    # members already here count from the clock start, and get longer because
+    # nobody told them about a deadline when they joined.
+    kick_after_days = _days("KICK_AFTER_DAYS", 3)
+    existing_kick_after_days = _days("EXISTING_KICK_AFTER_DAYS", 14)
 
     # Officer roles: holders can run /ac and are never kicked. ADMIN_ROLE_ID is
     # the original single-role setting and is still honoured.
@@ -110,17 +121,15 @@ def load_config() -> Config:
     exempt_role_ids = frozenset(_int_list("EXEMPT_ROLE_IDS", "role IDs"))
 
     # Days-left marks at which a member on the clock is DM'd a reminder. Unset
-    # means the default; an empty value switches reminders off. A mark at or
-    # beyond the grace period would land on top of the welcome DM, so drop it.
+    # means the default; an empty value switches reminders off. Marks at or
+    # beyond a member's own grace period are skipped per member by the bot.
     if os.environ.get("REMINDER_DAYS") is None:
         reminder_days = [7, 3, 1]
     else:
         reminder_days = _int_list("REMINDER_DAYS", "whole days")
     if any(day < 1 for day in reminder_days):
         raise ConfigError("REMINDER_DAYS must be whole days, each at least 1.")
-    reminder_days = tuple(
-        sorted({day for day in reminder_days if day < kick_after_days}, reverse=True)
-    )
+    reminder_days = tuple(sorted(set(reminder_days), reverse=True))
 
     return Config(
         discord_token=_required("DISCORD_TOKEN"),
@@ -138,6 +147,7 @@ def load_config() -> Config:
         db_path=os.environ.get("DB_PATH", "anticheat.db").strip() or "anticheat.db",
         port=port,
         kick_after_days=kick_after_days,
+        existing_kick_after_days=existing_kick_after_days,
         exempt_role_ids=exempt_role_ids,
         reminder_days=reminder_days,
     )

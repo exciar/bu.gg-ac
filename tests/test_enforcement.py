@@ -2,8 +2,8 @@
 
 A bug here removes real people from the server, so every branch is pinned,
 including the ones that must never fire: enforcement off, officers, exempt
-roles, members who were here before the clock started, members who outrank
-the bot, and anyone still inside their grace period.
+roles, members who outrank the bot, anyone still inside their grace period,
+and anyone already here at the moment the clock starts.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ OFFICER_ROLE = 1000  # a second officer role, e.g. President
 EXEMPT_ROLE = 4242
 BOT_POSITION = 43
 STARTED = NOW - timedelta(days=20)
+NEW_DAYS = 3        # joined while the clock runs, counted from joining
+EXISTING_DAYS = 14  # already here, counted from the clock start
 
 
 def verdict(**overrides):
@@ -33,10 +35,11 @@ def verdict(**overrides):
         is_verified=False,
         role_ids=set(),
         top_role_position=10,
-        joined_at=NOW - timedelta(days=15),
+        joined_at=NOW - timedelta(days=NEW_DAYS + 1),
         now=NOW,
         enforcement_started_at=STARTED,
-        kick_after_days=14,
+        kick_after_days=NEW_DAYS,
+        existing_kick_after_days=EXISTING_DAYS,
         admin_role_ids=frozenset({ADMIN_ROLE, OFFICER_ROLE}),
         exempt_role_ids=frozenset({EXEMPT_ROLE}),
         bot_top_position=BOT_POSITION,
@@ -54,26 +57,33 @@ def test_nobody_is_kicked_until_officers_start_the_clock():
     assert deadline is None
 
 
-def test_members_who_joined_before_the_clock_are_never_kicked():
-    """The clock is for new members only. Starting it must never put the
-    people already in the server on a deadline."""
-    got, deadline = verdict(joined_at=STARTED - timedelta(seconds=1))
-    assert got is KickVerdict.EXEMPT_EXISTING
-    assert deadline is None
+def test_starting_the_clock_never_removes_anyone_on_the_spot():
+    """A member here for a year is not instantly overdue: everyone already in
+    the server gets the full existing-member grace from the clock start."""
+    got, deadline = verdict(enforcement_started_at=NOW, joined_at=NOW - timedelta(days=400))
+    assert got is KickVerdict.WITHIN_GRACE
+    assert deadline == NOW + timedelta(days=EXISTING_DAYS)
 
 
-def test_existing_members_stay_safe_no_matter_how_long_the_clock_runs():
+def test_members_already_here_count_from_the_clock_start():
+    got, deadline = verdict(joined_at=STARTED - timedelta(seconds=1), now=STARTED)
+    assert got is KickVerdict.WITHIN_GRACE
+    assert deadline == STARTED + timedelta(days=EXISTING_DAYS)
+
+
+def test_members_already_here_are_kicked_once_their_grace_runs_out():
     got, _ = verdict(
-        enforcement_started_at=NOW - timedelta(days=365),
+        enforcement_started_at=NOW - timedelta(days=EXISTING_DAYS, seconds=1),
         joined_at=NOW - timedelta(days=400),
     )
-    assert got is KickVerdict.EXEMPT_EXISTING
+    assert got is KickVerdict.KICK
 
 
-def test_missing_join_date_is_treated_as_an_existing_member():
+def test_missing_join_date_counts_as_already_here():
     """If Discord cannot tell us when they joined, we cannot prove they are
-    new -- so they are not kicked."""
-    assert verdict(joined_at=None)[0] is KickVerdict.EXEMPT_EXISTING
+    new -- so they get the longer grace, from the clock start."""
+    _, deadline = verdict(joined_at=None, now=STARTED)
+    assert deadline == STARTED + timedelta(days=EXISTING_DAYS)
 
 
 def test_bots_are_never_kicked():
@@ -116,13 +126,13 @@ def test_exemptions_win_over_an_expired_deadline():
 
 
 def test_kicked_once_the_grace_period_has_passed():
-    got, deadline = verdict(joined_at=NOW - timedelta(days=14, seconds=1))
+    got, deadline = verdict(joined_at=NOW - timedelta(days=NEW_DAYS, seconds=1))
     assert got is KickVerdict.KICK
     assert deadline < NOW
 
 
 def test_still_safe_one_second_before_the_deadline():
-    got, deadline = verdict(joined_at=NOW - timedelta(days=14) + timedelta(seconds=1))
+    got, deadline = verdict(joined_at=NOW - timedelta(days=NEW_DAYS) + timedelta(seconds=1))
     assert got is KickVerdict.WITHIN_GRACE
     assert deadline > NOW
 
@@ -131,32 +141,35 @@ def test_the_timer_starts_the_moment_they_join():
     joined = NOW - timedelta(hours=1)
     got, deadline = verdict(joined_at=joined)
     assert got is KickVerdict.WITHIN_GRACE
-    assert deadline == joined + timedelta(days=14)
+    assert deadline == joined + timedelta(days=NEW_DAYS)
 
 
 def test_joining_the_instant_the_clock_starts_counts_as_new():
     got, deadline = verdict(enforcement_started_at=NOW, joined_at=NOW)
     assert got is KickVerdict.WITHIN_GRACE
-    assert deadline == NOW + timedelta(days=14)
+    assert deadline == NOW + timedelta(days=NEW_DAYS)
 
 
 def test_a_member_who_joins_late_in_the_clock_gets_their_own_full_grace():
-    """Joining on day 13 of the clock must not mean being kicked on day 14."""
+    """Joining on day 13 of the clock must not mean a shortened grace."""
     joined = STARTED + timedelta(days=13)
     _, deadline = verdict(joined_at=joined, now=joined + timedelta(days=1))
-    assert deadline == joined + timedelta(days=14)
+    assert deadline == joined + timedelta(days=NEW_DAYS)
 
 
-def test_grace_period_length_is_configurable():
+def test_grace_period_lengths_are_configurable():
     _, deadline = verdict(joined_at=NOW, kick_after_days=30)
     assert deadline == NOW + timedelta(days=30)
+    _, deadline = verdict(joined_at=None, now=STARTED, existing_kick_after_days=30)
+    assert deadline == STARTED + timedelta(days=30)
 
 
-def test_grace_deadline_counts_from_the_join():
+def test_grace_deadline_counts_new_members_from_joining_and_others_from_the_start():
     from security import grace_deadline
 
-    assert grace_deadline(NOW, 14) == NOW + timedelta(days=14)
-    assert grace_deadline(NOW, 3) == NOW + timedelta(days=3)
+    assert grace_deadline(NOW, STARTED, 3, 14) == NOW + timedelta(days=3)
+    assert grace_deadline(STARTED - timedelta(days=1), STARTED, 3, 14) == STARTED + timedelta(days=14)
+    assert grace_deadline(None, STARTED, 3, 14) == STARTED + timedelta(days=14)
 
 
 # --- the welcome DM ------------------------------------------------------
@@ -178,10 +191,21 @@ def test_join_dm_never_contains_a_verification_link():
     from bot import build_join_dm
 
     for deadline in (None, NOW + timedelta(days=14)):
-        text = build_join_dm("BU.gg", deadline)
-        assert "http://" not in text
-        assert "https://" not in text
-        assert "state=" not in text
+        for existing in (False, True):
+            text = build_join_dm("BU.gg", deadline, existing=existing)
+            assert "http://" not in text
+            assert "https://" not in text
+            assert "state=" not in text
+
+
+def test_notice_for_members_already_here_is_not_a_welcome():
+    from bot import build_join_dm
+
+    deadline = NOW + timedelta(days=EXISTING_DAYS)
+    text = build_join_dm("BU.gg", deadline, existing=True)
+    assert "Welcome" not in text
+    assert "/verify" in text
+    assert f"<t:{int(deadline.timestamp())}:F>" in text
 
 
 def test_join_dm_states_the_deadline_only_when_enforcement_is_running():
@@ -202,7 +226,7 @@ def test_join_dm_deadline_matches_what_the_kick_logic_would_use():
     from bot import build_join_dm
     from security import grace_deadline
 
-    deadline = grace_deadline(NOW, 14)
+    deadline = grace_deadline(NOW, STARTED, NEW_DAYS, EXISTING_DAYS)
     _, kick_deadline = verdict(joined_at=NOW, now=NOW)
     assert kick_deadline == deadline
     assert f"<t:{int(deadline.timestamp())}:F>" in build_join_dm("BU.gg", deadline)
@@ -246,6 +270,27 @@ def test_catching_up_sends_only_the_most_urgent_stage():
 def test_no_reminder_once_the_deadline_has_passed():
     assert due(timedelta(seconds=0)) is None
     assert due(-timedelta(hours=1)) is None
+
+
+def test_reminder_marks_beyond_a_members_grace_are_skipped():
+    """A 7- or 3-day reminder for someone with 3 days would land on top of
+    their welcome DM."""
+    from bot import reminder_stages
+
+    assert reminder_stages(make_config(), existing=False) == (1,)
+
+
+def test_members_already_here_get_one_notice_then_the_usual_reminders():
+    from bot import reminder_stages
+    from security import reminder_due
+
+    stages = reminder_stages(make_config(), existing=True)
+    assert stages == (EXISTING_DAYS, 7, 3, 1)
+    deadline = NOW + timedelta(days=EXISTING_DAYS)
+    # Right after the clock starts, the notice is what's due -- once.
+    assert reminder_due(deadline, NOW, stages, set()) == EXISTING_DAYS
+    assert reminder_due(deadline, NOW + timedelta(hours=1), stages, {EXISTING_DAYS}) is None
+    assert reminder_due(deadline, deadline - timedelta(days=7), stages, {EXISTING_DAYS}) == 7
 
 
 def test_reminder_dm_names_the_deadline_and_carries_no_link():
@@ -403,7 +448,8 @@ def make_config(**overrides):
         admin_role_ids=frozenset({ADMIN_ROLE, OFFICER_ROLE}),
         google_client_id="c", google_client_secret="s", base_url="http://localhost:8000",
         secret_key="k", roster_path="roster.csv", roster_mode="roster",
-        db_path=":memory:", port=8000, kick_after_days=14,
+        db_path=":memory:", port=8000,
+        kick_after_days=NEW_DAYS, existing_kick_after_days=EXISTING_DAYS,
         exempt_role_ids=frozenset({EXEMPT_ROLE}), reminder_days=STAGES,
     )
     base.update(overrides)
@@ -421,7 +467,7 @@ def test_scan_sorts_a_mixed_guild_into_the_right_buckets():
         FakeMember(id=5, roles=[FakeRole(EXEMPT_ROLE)]),             # exempt role
         FakeMember(id=6, roles=[FakeRole(77, position=99)]),         # outranks bot
         FakeMember(id=7, joined_at=NOW - timedelta(days=1)),         # new joiner
-        FakeMember(id=8, joined_at=NOW - timedelta(days=400)),       # was here first
+        FakeMember(id=8, joined_at=NOW - timedelta(days=400)),       # here first, grace over
         FakeMember(id=9, roles=[FakeRole(OFFICER_ROLE, position=57)]),  # President
     ]
     grouped = scan_members(
@@ -436,14 +482,31 @@ def test_scan_sorts_a_mixed_guild_into_the_right_buckets():
     def ids(verdict_key):
         return sorted(m.id for m, _ in grouped[verdict_key])
 
-    assert ids(KickVerdict.KICK) == [1]
+    assert ids(KickVerdict.KICK) == [1, 8]
     assert ids(KickVerdict.EXEMPT_VERIFIED) == [2]
     assert ids(KickVerdict.EXEMPT_BOT) == [3]
     assert ids(KickVerdict.EXEMPT_OFFICER) == [4, 9]
     assert ids(KickVerdict.EXEMPT_ROLE) == [5]
     assert ids(KickVerdict.CANNOT_KICK) == [6]
     assert ids(KickVerdict.WITHIN_GRACE) == [7]
-    assert ids(KickVerdict.EXEMPT_EXISTING) == [8]
+
+
+def test_starting_the_clock_today_kicks_nobody_in_an_established_guild():
+    """The deploy-day case: a guild full of long-time unverified members goes
+    on the clock, and not one of them is due yet."""
+    from bot import scan_members
+
+    members = [FakeMember(id=i, joined_at=NOW - timedelta(days=30 * i)) for i in range(1, 6)]
+    grouped = scan_members(
+        members,
+        cfg=make_config(),
+        verified_ids=set(),
+        bot_top_position=BOT_POSITION,
+        enforcement_started_at=NOW,
+        now=NOW,
+    )
+    assert grouped[KickVerdict.KICK] == []
+    assert len(grouped[KickVerdict.WITHIN_GRACE]) == 5
 
 
 def test_scan_kicks_nobody_while_enforcement_is_off():

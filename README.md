@@ -271,10 +271,19 @@ the roster check — the `email_verified` and domain rules still apply.
 
 ## 6. Kicking members who never verify
 
-New members who never verify are removed after a grace period — but **only members who join
-after officers start the clock**, and only once they have had a full `KICK_AFTER_DAYS` from
-the moment they joined. Everyone already in the server when the clock starts is never kicked,
-so deploying this or starting the clock can never remove an existing member.
+Members who never verify are removed after a grace period. Nothing happens until officers
+start the clock; from then on every member who isn't verified (and isn't exempt, see below)
+is on it:
+
+- **Members who join after the clock starts** get `KICK_AFTER_DAYS` (default 3) from the
+  moment they join.
+- **Members already in the server when it starts** get `EXISTING_KICK_AFTER_DAYS`
+  (default 14) from the moment it starts.
+
+Every deadline lies at least a full grace period after the clock starts, so deploying this or
+starting the clock never removes anyone on the spot. The clock only asks whether someone is
+verified right now: a member who runs `/unverify`, or is `/ac revoke`d, after their deadline
+is removed on the next hourly pass.
 
 ### Welcome DM and reminders
 
@@ -289,8 +298,14 @@ The server uses **Discord Onboarding**, and that is where members pick their sta
 which is after they join, so the bot waits for that (up to 15 minutes) before deciding whether
 to DM them.
 
+Members who were already here when the clock started never got a welcome DM with a deadline,
+so on the first hourly pass after `/ac enforce start` each of them gets a one-time notice with
+their deadline instead. DMs in a pass go out a second apart so the batch doesn't look like spam
+to Discord.
+
 While they are on the clock, the bot also DMs a reminder at each mark in `REMINDER_DAYS`
-(default: 7, 3 and 1 day(s) left). Each reminder is sent once; after downtime a member gets only
+(default: 7, 3 and 1 day(s) left) that falls inside their grace period — so members on a 3-day
+clock get only the 1-day reminder. Each reminder is sent once; after downtime a member gets only
 the most urgent one, not several back to back. Members whose DMs are closed simply get nothing
 and can still verify normally.
 
@@ -299,14 +314,15 @@ link still exists — no DM, no second verification.
 
 ### The sequence
 
-1. Post your announcement in the server explaining that new members must verify.
-2. Run **`/ac enforce start`**. From that moment, every member who joins is on the clock.
+1. Post your announcement in the server explaining that every member must verify.
+2. Run **`/ac enforce start`**. From that moment, every member who isn't verified is on the
+   clock, and members already here are DM'd their deadline within the hour.
 3. **`/ac enforce status`** shows who is on the clock and when each is due.
 4. The bot checks hourly: it sends any reminders that are due, then DMs the reason to anyone
    past their deadline and kicks them.
 
-`/ac enforce stop` halts it at any time. Starting it again only covers members who join after
-that — anyone who joined while it was stopped counts as already here.
+`/ac enforce stop` halts it at any time. Starting it again gives every member who isn't verified
+a fresh deadline — anyone in the server at that moment counts as already here.
 
 ### Who is never kicked or asked to verify
 
@@ -315,8 +331,6 @@ that — anyone who joined while it was stopped counts as already here.
 - Anyone with an officer role in `ADMIN_ROLE_IDS`
 - Anyone with a role listed in `EXEMPT_ROLE_IDS` — BU.gg lists **Outsider** and **Graduate** here, so
   non-BU members and graduates get no timer and no DMs
-- Anyone who was already in the server when the clock started (or whose join date Discord
-  cannot report)
 - Anyone whose top role sits at or above the bot's — Discord forbids it. `/ac enforce status`
   counts these so they never silently look "handled"; move the bot's role up if you need them
   covered.
