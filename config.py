@@ -8,7 +8,7 @@ with a blank signing key.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -21,6 +21,28 @@ ROSTER_MODE_DOMAIN_ONLY = "domain_only"
 
 class ConfigError(RuntimeError):
     """Raised when a required environment variable is missing or malformed."""
+
+
+@dataclass(frozen=True)
+class ScamConfig:
+    """Anti-scam settings (see antiscam.py). Off, and in dry run, by default."""
+
+    enabled: bool = False
+    dry_run: bool = True
+    log_channel_id: int | None = None
+    action: str = "timeout"  # or "softban"
+    timeout_hours: int = 24
+    burst_window_seconds: int = 60
+    burst_min_channels: int = 2
+    min_images: int = 2
+    max_images: int = 4
+    max_text_chars: int = 15
+    flag_score: int = 3
+    confirm_score: int = 10
+    ocr_min_keywords: int = 2
+    hash_max_distance: int = 10
+    exempt_role_ids: frozenset[int] = frozenset()
+    exempt_channel_ids: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -42,6 +64,7 @@ class Config:
     exempt_role_ids: frozenset[int]
     no_kick_role_ids: frozenset[int]
     reminder_days: tuple[int, ...]
+    scam: ScamConfig = field(default_factory=ScamConfig)
 
     @property
     def redirect_uri(self) -> str:
@@ -86,6 +109,68 @@ def _int_list(name: str, what: str) -> list[int]:
         return [int(part.strip()) for part in raw.split(",") if part.strip()]
     except ValueError:
         raise ConfigError(f"{name} must be a comma-separated list of {what}.") from None
+
+
+def _bounded_int(name: str, default: int, low: int, high: int) -> int:
+    """An optional whole number within [low, high]."""
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number.") from None
+    if not low <= value <= high:
+        raise ConfigError(f"{name} must be between {low} and {high}.")
+    return value
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{name} must be true or false.")
+
+
+def load_scam_config() -> ScamConfig:
+    enabled = _bool("SCAM_ENABLED", False)
+    log_channel = _int_list("SCAM_LOG_CHANNEL_ID", "channel IDs")
+    if enabled and len(log_channel) != 1:
+        raise ConfigError("SCAM_LOG_CHANNEL_ID must be set to one channel ID when SCAM_ENABLED=true.")
+
+    action = os.environ.get("SCAM_ACTION", "timeout").strip().lower() or "timeout"
+    if action not in ("timeout", "softban"):
+        raise ConfigError("SCAM_ACTION must be timeout or softban.")
+
+    min_images = _bounded_int("SCAM_MIN_IMAGES", 2, 1, 10)
+    max_images = _bounded_int("SCAM_MAX_IMAGES", 4, 1, 10)
+    if max_images < min_images:
+        raise ConfigError("SCAM_MAX_IMAGES must be at least SCAM_MIN_IMAGES.")
+    flag_score = _bounded_int("SCAM_FLAG_SCORE", 3, 1, 100)
+    confirm_score = _bounded_int("SCAM_CONFIRM_SCORE", 10, 1, 100)
+    if confirm_score < flag_score:
+        raise ConfigError("SCAM_CONFIRM_SCORE must be at least SCAM_FLAG_SCORE.")
+
+    return ScamConfig(
+        enabled=enabled,
+        dry_run=_bool("SCAM_DRY_RUN", True),
+        log_channel_id=log_channel[0] if log_channel else None,
+        action=action,
+        # Discord caps a timeout at 28 days.
+        timeout_hours=_bounded_int("SCAM_TIMEOUT_HOURS", 24, 1, 28 * 24),
+        burst_window_seconds=_bounded_int("SCAM_BURST_WINDOW_SECONDS", 60, 5, 600),
+        burst_min_channels=_bounded_int("SCAM_BURST_MIN_CHANNELS", 2, 2, 50),
+        min_images=min_images,
+        max_images=max_images,
+        max_text_chars=_bounded_int("SCAM_MAX_TEXT_CHARS", 15, 0, 2000),
+        flag_score=flag_score,
+        confirm_score=confirm_score,
+        ocr_min_keywords=_bounded_int("SCAM_OCR_MIN_KEYWORDS", 2, 1, 20),
+        hash_max_distance=_bounded_int("SCAM_HASH_MAX_DISTANCE", 10, 0, 32),
+        exempt_role_ids=frozenset(_int_list("SCAM_EXEMPT_ROLE_IDS", "role IDs")),
+        exempt_channel_ids=frozenset(_int_list("SCAM_EXEMPT_CHANNEL_IDS", "channel IDs")),
+    )
 
 
 def load_config() -> Config:
@@ -155,4 +240,5 @@ def load_config() -> Config:
         exempt_role_ids=exempt_role_ids,
         no_kick_role_ids=no_kick_role_ids,
         reminder_days=reminder_days,
+        scam=load_scam_config(),
     )

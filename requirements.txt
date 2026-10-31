@@ -13,6 +13,11 @@ Authlib==1.8.0
 # ID-token verification imports joserfc directly. Pinned because we import it.
 joserfc==1.7.5
 
+# Anti-scam: image decoding, perceptual hashes, and OCR. pytesseract drives
+# the Tesseract binary, a system package: apt install tesseract-ocr
+Pillow==13.0.0
+pytesseract==0.3.13
+
 # Tests only.
 pytest==9.1.1
 

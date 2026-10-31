@@ -17,6 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from antiscam import AntiScam
 from config import Config
 from security import (
     KickVerdict,
@@ -172,6 +173,11 @@ class AntiCheatBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
+        if cfg.scam.enabled:
+            # Anti-scam reads posts. message_content is privileged too: it must
+            # be switched on in the Developer Portal, or the bot can't log in.
+            intents.guild_messages = True
+            intents.message_content = True
 
         super().__init__(command_prefix="!anticheat-unused", intents=intents, help_command=None)
         self.cfg = cfg
@@ -180,6 +186,8 @@ class AntiCheatBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         register_commands(self)
+        if self.cfg.scam.enabled:
+            await self.add_cog(AntiScam(self))
         guild = discord.Object(id=self.cfg.guild_id)
         # Guild-scoped sync appears immediately instead of waiting on global
         # command propagation.

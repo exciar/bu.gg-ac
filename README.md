@@ -50,8 +50,10 @@ ID token, so it cannot be bypassed by editing the URL.
 | `/ac enforce status` | officers | Who is on the kick clock and when they are due |
 | `/ac enforce start` | officers | Puts every member who joins from now on under a deadline |
 | `/ac enforce stop` | officers | Stops the clock; nobody is kicked |
+| Message → **Apps → Add to scam images** | officers | Remembers that message's images, so re-posts are confirmed scams on sight (anti-scam, section 7) |
 
-`/ac` commands require one of the officer roles in `ADMIN_ROLE_IDS`. Every reply is ephemeral.
+`/ac` commands and the scam menu require one of the officer roles in `ADMIN_ROLE_IDS`. Every
+reply is ephemeral.
 
 ---
 
@@ -107,8 +109,8 @@ Google moved these settings out of "APIs & Services → OAuth consent screen" an
 2. **Bot → Reset Token**, copy it into `DISCORD_TOKEN`. Treat it like a password — anyone
    holding it controls the bot.
 3. **Bot → Privileged Gateway Intents**: enable **Server Members Intent**.
-   The bot needs it to resolve a member and assign their role. Message Content is *not*
-   needed — leave it off.
+   The bot needs it to resolve a member and assign their role. Message Content is only
+   needed for the anti-scam module (section 7); leave it off otherwise.
 4. **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`
    - Bot permissions: **Manage Roles** and **Kick Members**
@@ -359,6 +361,105 @@ Kicked members can rejoin and verify — this is a kick, never a ban. Each kick 
 
 ---
 
+## 7. Anti-scam: hijacked accounts posting scam images
+
+The scam: malware steals a real member's Discord session, and the attacker posts 2–4
+blurry photos of a fake celebrity (MrBeast, Elon…) crypto-casino giveaway in every channel
+the account can reach. A promo code, a "Withdrawal Successful" screen, little or no text,
+**no links**, so link filters and AutoMod miss it. The accounts are old and trusted, often
+staff. On Oct 30 one officer's account posted it in 25 channels in 76 seconds.
+
+The module is in `antiscam.py`. It never touches verification; it keeps its own tables in
+the same database. **It's off until you set `SCAM_ENABLED=true`, and starts in dry run:** it
+posts what it *would* have done to the log channel and touches nobody.
+
+### How it decides
+
+Each image post gets a score. At `SCAM_FLAG_SCORE` (3) it is OCR'd; at
+`SCAM_CONFIRM_SCORE` (10) it is a confirmed hit.
+
+| Signal | Points |
+|---|---|
+| The **same images** (same count and file sizes) posted in `SCAM_BURST_MIN_CHANNELS`+ channels within `SCAM_BURST_WINDOW_SECONDS` | **+10**, confirms on its own |
+| Image posts in that many channels, but different images | +5 |
+| Scam shape: `SCAM_MIN_IMAGES`–`SCAM_MAX_IMAGES` images and at most `SCAM_MAX_TEXT_CHARS` characters of text (mentions don't count) | +3 |
+| …plus @everyone / @here | +2 |
+| …from someone who hasn't posted an image in 30 days (only after the bot has watched for 30 days) | +2 |
+
+Two more ways to confirm, both run only on messages that need them:
+
+- **OCR** (Tesseract), only on flagged messages and one at a time: `SCAM_OCR_MIN_KEYWORDS`
+  (2) different keywords from *promo code, bonus, withdraw, withdrawal successful, casino,
+  deposit, USDT, TRC20, ERC20, $2,500, activate code*, or a domain name.
+- **Known images:** every confirmed hit remembers its images as perceptual hashes. A new
+  image within `SCAM_HASH_MAX_DISTANCE` (10 of 64 bits) of one is confirmed on sight,
+  even when it's been re-compressed, resized or blurred. Officers add images by hand
+  with right-click on the message → **Apps → Add to scam images**.
+
+### What happens on a confirmed hit
+
+1. **Timeout** for `SCAM_TIMEOUT_HOURS` (24). Never a ban: it's a real member who got hacked.
+2. Their images are saved for the alert, and their hashes remembered.
+3. **Delete** every image post of theirs from the burst, in every channel.
+4. **DM** them: scan the PC first, then change the password from a clean device, log out
+   all devices, check Authorized Apps, and ask an officer to lift the timeout.
+5. **Alert** in `SCAM_LOG_CHANNEL_ID`: who, channels hit, signals, OCR keywords, thumbnails,
+   and what was done. It **@here-pings** whenever something couldn't be done.
+
+The alert has a **False positive – restore** button (officers only, works after restarts).
+It lifts the timeout, forgets that hit's images, and marks the alert green. Deleted posts
+can't come back.
+
+**`SCAM_ACTION=softban`** replaces steps 1 and 3 with a softban: ban with "delete message
+history" covering the burst (plus 5 minutes), then unban straight away. That deletes their
+posts in **every** channel, including ones the bot can't see or where it lacks Manage
+Messages. The catch is that it removes them from the server; they rejoin with an invite.
+
+Never acted on: the server owner (reported, with a ping), bots, webhooks, anyone with a role
+in `SCAM_EXEMPT_ROLE_IDS`. Officers are **not** exempt, because staff are the usual
+victims. In `SCAM_EXEMPT_CHANNEL_IDS` (art or media channels), posts never count towards a
+hit; a burst copy there is still deleted.
+
+### Setup
+
+1. **Developer Portal → Bot → Privileged Gateway Intents:** enable **Message Content
+   Intent**. Do this *before* setting `SCAM_ENABLED=true`, or the bot can't log in at all.
+2. **Install Tesseract** on the VPS (without it OCR is off; bursts and image matches still
+   work):
+   ```bash
+   apt install tesseract-ocr
+   ```
+3. **Permissions** for the bot's role: **Manage Messages**, **Moderate Members**, and **Ban
+   Members** for softban. Allow **Mention @everyone** in the log channel so the ping works.
+4. **Reach:** the bot only sees channels its role can read. In each category, open Edit
+   Category → Permissions, add the bot's role, and allow **View Channel**, **Read Message
+   History** and **Manage Messages**. A category that denies Manage Messages to a role the
+   bot has (BU.gg's Member role does) blocks deleting there unless the bot's role is
+   allowed explicitly.
+5. **Role order:** the bot can only time out or softban members below its highest role.
+   To cover staff, drag its role above the officer roles. The trade-off: a leaked bot
+   token could then act on officers.
+6. Create a staff-only log channel and set, in `.env`:
+   ```ini
+   SCAM_ENABLED=true
+   SCAM_LOG_CHANNEL_ID=<channel id>
+   ```
+   Restart. The journal shows `anti-scam: on (DRY RUN, …)` plus any missing permissions.
+7. **Test:** have an officer post the same two images in two channels. A dry-run alert
+   appears. Run in dry run for a week or so, then set `SCAM_DRY_RUN=false`.
+
+### Tuning
+
+| Seeing | Change |
+|---|---|
+| Alerts for people sharing photos in two channels | Raise `SCAM_BURST_MIN_CHANNELS` to 3, or exempt the media channel |
+| A scam that slipped through with a caption | Raise `SCAM_MAX_TEXT_CHARS` |
+| Memes getting OCR'd constantly | Raise `SCAM_FLAG_SCORE` to 5, so the shape alone no longer triggers OCR |
+| OCR confirming normal screenshots | Raise `SCAM_OCR_MIN_KEYWORDS` to 3 |
+| Re-posted scam images not matching | Raise `SCAM_HASH_MAX_DISTANCE` (12–14); lower it on false matches |
+
+---
+
 ## Privacy notes
 
 - Stored per member: email, the `name` claim from the Google ID token, Discord ID, guild ID,
@@ -375,6 +476,10 @@ Kicked members can rejoin and verify — this is a kick, never a ban. Each kick 
 - The `reminders` table records which reminder DMs a member on the kick clock has been
   sent (Discord ID, deadline, stage). Rows are dropped once the member verifies, leaves,
   is kicked or runs `/unverify`.
+- Anti-scam reads message text only to measure its length and spot @everyone; it never
+  stores or logs it. It keeps, per member, when they last posted an image (dropped after
+  30 days), and the hashes of confirmed scam images. Alerts re-post scam thumbnails into
+  the log channel.
 - Tokens and authorization codes are never logged. uvicorn's access log is disabled and
   Caddy's is discarded, because both would otherwise record the query string containing them.
 - `/unverify` deletes the member's row immediately, with no officer approval needed.
@@ -390,3 +495,6 @@ Kicked members can rejoin and verify — this is a kick, never a ban. Each kick 
 | Commands do not appear | Wrong `GUILD_ID`, or the bot was invited without `applications.commands` |
 | "This link expired" | Links last 10 minutes; run `/verify` again |
 | Everyone gets "not on roster" | `ROSTER_PATH` points at the wrong file — check `/ac stats` for the loaded count |
+| Bot won't start after `SCAM_ENABLED=true` (`PrivilegedIntentsRequired`) | Message Content Intent is off in the Developer Portal |
+| Anti-scam alert says it couldn't delete in some channels | A category denies the bot Manage Messages; allow it for the bot's role (section 7, step 4) |
+| Journal: `Tesseract is not installed -- OCR is off` | `apt install tesseract-ocr`, then restart |
