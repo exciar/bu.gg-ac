@@ -594,17 +594,22 @@ def register_commands(bot: AntiCheatBot) -> None:
         await interaction.followup.send(body, file=export, ephemeral=True)
 
     @ac.command(name="revoke", description="Remove a member's link and verified role")
-    @app_commands.describe(user="The member to revoke")
+    @app_commands.describe(user="The member to revoke, or paste their user ID if they left")
     @admin_only()
-    async def revoke(interaction: discord.Interaction, user: discord.Member) -> None:
+    async def revoke(interaction: discord.Interaction, user: discord.User) -> None:
+        # discord.User, not Member: someone who already left the server must
+        # still be revocable. Discord hands over a Member if they are here.
         await interaction.response.defer(ephemeral=True)
         removed = store.delete_link(user.id)
-        await remove_verified_role(bot, interaction.guild.id, user.id)
+        in_server = isinstance(user, discord.Member)
+        if in_server:
+            await remove_verified_role(bot, interaction.guild.id, user.id)
         store.log_attempt(user.id, "revoked")
+        role = "role removed" if in_server else "not in the server, so no role to remove"
         await interaction.followup.send(
-            f"Revoked {user.mention}. Link deleted and role removed."
+            f"Revoked {user.mention}: link deleted, {role}."
             if removed
-            else f"{user.mention} had no link on record; role removed anyway.",
+            else f"{user.mention} had no link on record; {role}.",
             ephemeral=True,
         )
 

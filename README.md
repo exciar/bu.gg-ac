@@ -44,7 +44,7 @@ ID token, so it cannot be bypassed by editing the URL.
 | `/unverify` | anyone | Deletes your stored email and removes your verified role |
 | `/ac lookup @user` | officers | Shows the name and email linked to a member |
 | `/ac list` | officers | Every verified member as a CSV: name, Discord username, nickname, email, timestamp |
-| `/ac revoke @user` | officers | Deletes a member's link and removes their role |
+| `/ac revoke @user` | officers | Deletes a member's link and removes their role. Works after they leave too: paste their user ID (in the `/ac list` CSV) |
 | `/ac reload-roster` | officers | Re-reads the roster CSV from disk |
 | `/ac stats` | officers | Verified count, roster size, attempts by outcome |
 | `/ac enforce status` | officers | Who is on the kick clock and when they are due |
